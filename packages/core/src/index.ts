@@ -1,6 +1,5 @@
-import { getHooks, hook, initHooks } from "./hooks";
+import { getHooks, initHooks } from "./hooks";
 import { getConf, getData, getKeys, getMessage, getYml, getContractByContractName, getContractFromPath } from "./utils";
-import { zencode_exec } from "zenroom";
 import { addKeysToContext, addDataToContext, addNextToContext, addConfToContext } from "./context";
 import { NextFunction, Request, Response } from "express";
 import * as yaml from "js-yaml";
@@ -8,6 +7,9 @@ import { RestroomResult } from "./restroom-result";
 import { Zencode } from "@restroom-mw/zencode";
 import { BlockContext } from "./block-context";
 import { CHAIN_EXTENSION } from "@restroom-mw/utils";
+import { Worker } from 'worker_threads';
+import TSWorker from 'ts-worker';
+import { WorkerType } from "./worker-result";
 const functionHooks = initHooks;
 
 export default async (req: Request, res: Response, next: NextFunction) => {
@@ -83,7 +85,7 @@ export default async (req: Request, res: Response, next: NextFunction) => {
     const isChain = contractName.split(".")[1] === CHAIN_EXTENSION || false;
     const keys = isChain ? "{}" : getKeys(contractName);
     try {
-      return isChain ? executeChain(getYml(contractName.split(".")[0]), data) : callRestroom(data, keys, getConf(contractName), getContractByContractName(contractName), contractName);
+      return isChain ? executeChain(getYml(contractName.split(".")[0]), data) : callRestroomWithTimeout(data, keys, getConf(contractName), getContractByContractName(contractName), contractName);
     } catch (err){
       return await resolveRestroomResult({
         error: err
@@ -106,7 +108,7 @@ export default async (req: Request, res: Response, next: NextFunction) => {
       addConfToContext(singleContext, ymlContent.blocks[block]);
       addNextToContext(singleContext, ymlContent.blocks[block]);
       const zencode = getContractFromPath(block);
-      const restroomResult: any = await callRestroom(singleContext.data, JSON.stringify(singleContext.keys), singleContext.conf, zencode, block);
+      const restroomResult: any = await callRestroomWithTimeout(singleContext.data, JSON.stringify(singleContext.keys), singleContext.conf, zencode, block);
       if (restroomResult?.error) {
         return await resolveRestroomResult(restroomResult);
       }
@@ -126,45 +128,57 @@ export default async (req: Request, res: Response, next: NextFunction) => {
     }
     return await evaluateBlock(singleContext.next, ymlContent, singleContext.output);
   }
-
-  async function callRestroom(data: string, keys: string, conf:string, zencode:Zencode, contractPath:string): Promise<RestroomResult>{
-    
-    let restroomResult: RestroomResult = {};
-
-    try {
-      await runHook(hook.INIT, {});
-      await runHook(hook.BEFORE, { zencode, conf, data, keys });
-      await zencode_exec(zencode.content, {
-        data: Object.keys(data).length ? JSON.stringify(data) : undefined,
-        keys: keys,
-        conf: conf,
-      })
-        .then(async ({ result }) => {
-          zenroom_result = result;
-          result = JSON.parse(result);
-          await runHook(hook.SUCCESS, { result, zencode, zenroom_errors, outcome: restroomResult });
-          restroomResult.result = result;
-          restroomResult.status = 200;
+  
+  async function callRestroomWithTimeout(data: string, keys: string, conf:string, zencode:Zencode, contractPath:string):Promise<RestroomResult>{
+    return new Promise((resolve) => {
+      const inputData: any = {
+        data,
+        keys,
+        conf,
+        zencode:zencode.content,
+        contractPath
+      };
+      console.log("restroom created "+Date.now());
+      console.time("restroom");
+      const restroomWorker: Worker = TSWorker('../src/restroom-worker.ts', {
+        workerData: {
+          value:JSON.stringify(inputData)
+        }
+      });
+      console.log("timeout created "+Date.now());
+      console.time("timeout");
+      const timeoutWorker: Worker = TSWorker('../src/timeout-worker.ts', {
+        workerData: {
+          value: 10000
+        }
+      });
+      
+      restroomWorker.on('message', res => {
+        const result = JSON.parse(res);
+        if (result.type === WorkerType.HOOK){
+          runHook(result.hook, result.args);
+        } else if (result.type === WorkerType.RESTROOM_RESULT){
+          timeoutWorker.terminate();
+          console.log('Ho ammazzato timeout');
+          console.timeEnd("timeout");
+          console.timeEnd("restroom");
+          resolve(result.restroomResult);
+        }
+      });
+  
+      timeoutWorker.on('message', res => {
+        console.log('Ho ammazzato restroom');
+        console.timeEnd("timeout");
+        console.timeEnd("restroom");
+        restroomWorker.terminate();
+        resolve({
+          error: Error("timeout"),
+          errorMessage:"timeout"
         })
-        .then(async (json) => {
-          await runHook(hook.AFTER, { json, zencode, outcome: restroomResult });
-        })
-        .catch(async (e) => {
-          zenroom_errors = e;
-          await runHook(hook.ERROR, { zenroom_errors, zencode, outcome: restroomResult });
-          restroomResult.error = e;
-          restroomResult.errorMessage = `[ZENROOM EXECUTION ERROR FOR CONTRACT ${contractPath}]`;
-        })
-        .finally(async () => {
-          await runHook(hook.FINISH, { res, outcome: restroomResult });
-        });
-    } catch (e) {
-      await runHook(hook.EXCEPTION, res);
-      restroomResult.errorMessage = `[UNEXPECTED EXCEPTION FOR CONTRACT ${contractPath}]`;
-      restroomResult.error = e;
-    }
-    return restroomResult;
+      });
+    });
   }
+  
 
   let zenroom_result: string, json: string, zenroom_errors: string;
   zenroom_result = zenroom_errors = json = "";

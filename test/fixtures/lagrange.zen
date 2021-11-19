@@ -1,0 +1,8 @@
+Scenario secshare: create a shared secret
+
+Given I have a 'string' named '32BytesSecret'
+
+When I create the secret shares of '32BytesSecret' with '1000' quorum '50'
+
+and I rename the 'secret shares' to 'mySharedSecret'
+Then print the 'mySharedSecret'

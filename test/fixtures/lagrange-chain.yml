@@ -1,0 +1,6 @@
+zenchain: 1.0
+name: lagrange
+start: lagrange.zen
+blocks:
+  lagrange.zen:
+    keysFile: lagrange.keys
