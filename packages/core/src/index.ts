@@ -149,7 +149,7 @@ export default async (req: Request, res: Response, next: NextFunction) => {
       console.time("timeout");
       const timeoutWorker: Worker = TSWorker('../src/timeout-worker.ts', {
         workerData: {
-          value: 10000
+          value: 1000
         }
       });
       
