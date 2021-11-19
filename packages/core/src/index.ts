@@ -147,26 +147,8 @@ export default async (req: Request, res: Response, next: NextFunction) => {
       });
       console.log("timeout created "+Date.now());
       console.time("timeout");
-      const timeoutWorker: Worker = TSWorker('../src/timeout-worker.ts', {
-        workerData: {
-          value: 1000
-        }
-      });
-      
-      restroomWorker.on('message', res => {
-        const result = JSON.parse(res);
-        if (result.type === WorkerType.HOOK){
-          runHook(result.hook, result.args);
-        } else if (result.type === WorkerType.RESTROOM_RESULT){
-          timeoutWorker.terminate();
-          console.log('Ho ammazzato timeout');
-          console.timeEnd("timeout");
-          console.timeEnd("restroom");
-          resolve(result.restroomResult);
-        }
-      });
-  
-      timeoutWorker.on('message', res => {
+
+      const timer = setTimeout(()=>{
         console.log('Ho ammazzato restroom');
         console.timeEnd("timeout");
         console.timeEnd("restroom");
@@ -175,7 +157,21 @@ export default async (req: Request, res: Response, next: NextFunction) => {
           error: Error("timeout"),
           errorMessage:"timeout"
         })
+      },5000);
+      
+      restroomWorker.on('message', res => {
+        const result = JSON.parse(res);
+        if (result.type === WorkerType.HOOK){
+          runHook(result.hook, result.args);
+        } else if (result.type === WorkerType.RESTROOM_RESULT){
+          clearTimeout(timer);
+          console.log('Ho ammazzato timeout');
+          console.timeEnd("timeout");
+          console.timeEnd("restroom");
+          resolve(result.restroomResult);
+        }
       });
+  
     });
   }
   
